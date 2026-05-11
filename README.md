@@ -55,6 +55,12 @@ cd sentrysearch
 uv tool install .
 ```
 
+> **Requires Python 3.11 or 3.12** (PyTorch wheels don't yet support 3.13+). If your default Python is newer, install a managed 3.12 and pin the tool install:
+> ```bash
+> uv python install 3.12
+> uv tool install --python 3.12 .
+> ```
+
 3. Set up your API key (or [use a local model instead](#local-backend-no-api-key-needed)):
 
 ```bash
@@ -171,6 +177,13 @@ The model is **auto-detected from your hardware** — qwen8b for NVIDIA GPUs and
 > **Won't work well:** Intel Macs and machines without a dedicated GPU. These fall back to CPU with float32 — too slow and memory-hungry for practical use. Use the **Gemini API backend** (the default) instead.
 
 > **Not sure?** On Mac, use `".[local]"`. On NVIDIA, use `".[local-quantized]"` — 4-bit quantization works on the widest range of NVIDIA hardware with minimal quality loss. (bitsandbytes requires CUDA and does not work on Mac/MPS.)
+
+**Python version:** PyTorch wheels lag behind new Python releases, so the local backend requires Python 3.11 or 3.12. If your default Python is 3.13+, install a managed 3.12 and pin the tool install to it:
+
+```bash
+uv python install 3.12
+uv tool install --python 3.12 ".[local]"
+```
 
 **Mac prerequisite:** Install system FFmpeg (the local model's video processor requires it — the Gemini backend uses a bundled ffmpeg instead):
 
