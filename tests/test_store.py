@@ -181,6 +181,15 @@ class TestStoreBackend:
         )
         assert store.collection.name == "dashcam_chunks_qwen_cloud_qwen3-vl-embedding"
 
+    def test_qwen_cloud_collection_slug_sanitizes_special_chars(self, tmp_path):
+        from sentrysearch.store import SentryStore
+
+        raw = "org/model:v1@special"
+        store = SentryStore(db_path=tmp_path / "db", backend="qwen-cloud", model=raw)
+        suffix = store.collection.name.removeprefix("dashcam_chunks_qwen_cloud_")
+        assert "/" not in suffix and ":" not in suffix and "@" not in suffix
+        assert all(c.isalnum() or c in "._-" for c in suffix)
+
     def test_backends_use_separate_collections(self, tmp_path):
         from sentrysearch.store import SentryStore
 

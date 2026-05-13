@@ -30,6 +30,11 @@ DEFAULT_RPM = int(os.environ.get("DASHSCOPE_RPM", "45"))
 DEFAULT_VIDEO_FPS = float(os.environ.get("DASHSCOPE_VIDEO_FPS", "0.5"))
 
 
+def default_dashscope_embedding_model() -> str:
+    """Return the DashScope embedding model id from env or the built-in default."""
+    return os.environ.get("DASHSCOPE_EMBEDDING_MODEL") or DEFAULT_MODEL
+
+
 class DashScopeAPIKeyError(RuntimeError):
     """Raised when DASHSCOPE_API_KEY is missing."""
 
@@ -60,8 +65,43 @@ class _RateLimiter:
         self._timestamps.append(time.monotonic())
 
 
+def _is_transient_transport_error(exc: BaseException) -> bool:
+    """True for typical HTTP client / TLS / socket failures worth retrying."""
+    try:
+        import requests
+    except ImportError:
+        requests = None  # type: ignore[assignment]
+
+    if requests is not None and isinstance(
+        exc,
+        (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.SSLError,
+        ),
+    ):
+        return True
+    if isinstance(exc, (TimeoutError, BrokenPipeError, ConnectionResetError)):
+        return True
+    msg = str(exc).lower()
+    return any(
+        k in msg
+        for k in (
+            "connection",
+            "timeout",
+            "timed out",
+            "reset by peer",
+            "ssl",
+            "eof",
+            "broken pipe",
+            "temporarily unavailable",
+        )
+    )
+
+
 def _retry(fn, *, max_retries: int = 5, initial_delay: float = 2.0, max_delay: float = 60.0):
-    """Retry on throttling / transient errors."""
+    """Retry on throttling, API errors, and transient network/transport failures."""
     delay = initial_delay
     for attempt in range(max_retries + 1):
         try:
@@ -80,6 +120,17 @@ def _retry(fn, *, max_retries: int = 5, initial_delay: float = 2.0, max_delay: f
             wait = min(delay, max_delay)
             print(
                 f"  Retryable DashScope error (attempt {attempt + 1}/{max_retries}), "
+                f"waiting {wait:.0f}s: {exc}",
+                file=sys.stderr,
+            )
+            time.sleep(wait)
+            delay *= 2
+        except Exception as exc:  # noqa: BLE001 — narrow follow-up below
+            if not _is_transient_transport_error(exc) or attempt == max_retries:
+                raise
+            wait = min(delay, max_delay)
+            print(
+                f"  Retryable transport error (attempt {attempt + 1}/{max_retries}), "
                 f"waiting {wait:.0f}s: {exc}",
                 file=sys.stderr,
             )
@@ -118,11 +169,7 @@ class QwenCloudEmbedder(BaseEmbedder):
             )
 
         self._api_key = api_key
-        self._model = (
-            model_name
-            or os.environ.get("DASHSCOPE_EMBEDDING_MODEL")
-            or DEFAULT_MODEL
-        )
+        self._model = model_name or default_dashscope_embedding_model()
         self._dimensions = dimensions
         self._video_fps = (
             video_fps if video_fps is not None else DEFAULT_VIDEO_FPS

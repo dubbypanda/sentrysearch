@@ -7,7 +7,11 @@ Re-exports error classes from gemini_embedder for existing import sites.
 
 from .base_embedder import BaseEmbedder
 from .gemini_embedder import GeminiAPIKeyError, GeminiQuotaError  # noqa: F401
-from .qwen_cloud_embedder import DashScopeAPIKeyError, DashScopeDependencyError  # noqa: F401
+from .qwen_cloud_embedder import (  # noqa: F401
+    DashScopeAPIKeyError,
+    DashScopeDependencyError,
+    default_dashscope_embedding_model,
+)
 
 _current_embedder: BaseEmbedder | None = None
 

@@ -1,6 +1,7 @@
 """ChromaDB vector store."""
 
 import hashlib
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -8,6 +9,16 @@ import chromadb
 
 
 DEFAULT_DB_PATH = Path.home() / ".sentrysearch" / "db"
+
+# Chroma collection names allow [a-zA-Z0-9._-] only.
+_CHROMA_NAME_UNSAFE = re.compile(r"[^a-zA-Z0-9._-]+")
+
+
+def _chroma_collection_slug(name: str) -> str:
+    """Sanitize *name* for use inside a ChromaDB collection name segment."""
+    s = _CHROMA_NAME_UNSAFE.sub("_", (name or "").strip())
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s or "default"
 
 
 class BackendMismatchError(RuntimeError):
@@ -19,7 +30,7 @@ def _collection_name(backend: str, model: str | None = None) -> str:
     if backend == "gemini":
         return "dashcam_chunks"
     if backend == "qwen-cloud":
-        slug = (model or "qwen3-vl-embedding").replace("/", "_")
+        slug = _chroma_collection_slug(model or "qwen3-vl-embedding")
         return f"dashcam_chunks_qwen_cloud_{slug}"
     if model:
         return f"dashcam_chunks_local_{model}"
