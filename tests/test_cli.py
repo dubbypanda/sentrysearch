@@ -8,6 +8,8 @@ from click.testing import CliRunner
 
 from sentrysearch.cli import _fmt_time, _overlay_output_path, cli
 
+import importlib.metadata
+
 
 @pytest.fixture
 def runner():
@@ -32,6 +34,12 @@ class TestCliGroup:
         result = runner.invoke(cli, ["--help"])
         assert result.exit_code == 0
         assert "Search dashcam footage" in result.output or "search" in result.output.lower()
+
+    def test_version(self, runner):
+        result = runner.invoke(cli, ["--version"])
+        assert result.exit_code == 0
+        expected_version = importlib.metadata.version("sentrysearch")
+        assert expected_version in result.output
 
 
 class TestModelDashscopeFlagConflict:
