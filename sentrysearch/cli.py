@@ -91,6 +91,13 @@ def _cache_last_search(
         )
 
 
+def _strip_private_result_fields(results: list[dict]) -> list[dict]:
+    return [
+        {key: value for key, value in result.items() if not key.startswith("_")}
+        for result in results
+    ]
+
+
 def _open_file(path: str) -> None:
     """Open a file with the system's default application."""
     try:
@@ -651,8 +658,10 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
 @click.option("--dedupe", "dedupe_threshold", default=None, type=float,
               help="Drop results whose cosine similarity to a higher-ranked "
                    "result exceeds this (e.g. 0.9).")
+@click.option("--rerank", is_flag=True,
+              help="Use Gemini Flash to rerank candidates before trimming.")
 @click.option("--verbose", is_flag=True, help="Show debug info.")
-def search(query, n_results, output_dir, trim, save_top, threshold, overlay, backend, model, dashscope_model, quantize, dedupe_threshold, verbose):
+def search(query, n_results, output_dir, trim, save_top, threshold, overlay, backend, model, dashscope_model, quantize, dedupe_threshold, rerank, verbose):
     """Search indexed footage with a natural language QUERY."""
     from .embedder import get_embedder, reset_embedder
     from .local_embedder import normalize_model_key
@@ -728,8 +737,48 @@ def search(query, n_results, output_dir, trim, save_top, threshold, overlay, bac
 
         results = search_footage(query, store, n_results=n_results, verbose=verbose,
                                  dedupe_threshold=dedupe_threshold)
-        _cache_last_search(results, query=query)
-        _present_results(results, threshold, trim, save_top, output_dir, overlay, verbose)
+        rerank_enabled = rerank
+        if rerank and results:
+            from .gemini_embedder import GeminiAPIKeyError
+            from .gemini_reranker import GeminiReranker
+            from .reranker import rerank_results
+
+            try:
+                reranker = GeminiReranker()
+            except GeminiAPIKeyError:
+                click.secho(
+                    "--rerank skipped: GEMINI_API_KEY is not set; "
+                    "showing embedding results.",
+                    fg="yellow",
+                    err=True,
+                )
+                rerank_enabled = False
+            else:
+                import tempfile
+
+                with tempfile.TemporaryDirectory(
+                    prefix="sentrysearch_rerank_",
+                ) as candidate_dir:
+                    results = rerank_results(
+                        query, results, reranker,
+                        candidate_dir=candidate_dir,
+                        verbose=verbose,
+                    )
+                    _cache_last_search(
+                        _strip_private_result_fields(results), query=query,
+                    )
+                    _present_results(
+                        results, threshold, trim, save_top, output_dir,
+                        overlay, verbose, rerank_enabled=rerank_enabled,
+                    )
+                    return
+        _cache_last_search(
+            _strip_private_result_fields(results), query=query,
+        )
+        _present_results(
+            results, threshold, trim, save_top, output_dir, overlay, verbose,
+            rerank_enabled=rerank_enabled,
+        )
 
     except Exception as e:
         _handle_error(e)
@@ -737,7 +786,10 @@ def search(query, n_results, output_dir, trim, save_top, threshold, overlay, bac
         reset_embedder()
 
 
-def _present_results(results, threshold, trim, save_top, output_dir, overlay, verbose):
+def _present_results(
+    results, threshold, trim, save_top, output_dir, overlay, verbose, *,
+    rerank_enabled=False,
+):
     if not results:
         click.echo(
             "No results found.\n\n"
@@ -748,12 +800,30 @@ def _present_results(results, threshold, trim, save_top, output_dir, overlay, ve
         )
         return
 
-    best_score = results[0]["similarity_score"]
-    low_confidence = best_score < threshold
+    best = results[0]
+    best_score = best["similarity_score"]
+    rerank_match = best.get("rerank_match")
+    rerank_confidence = best.get("rerank_confidence")
+    has_rerank_score = (
+        rerank_enabled
+        and isinstance(rerank_match, bool)
+        and not isinstance(rerank_confidence, bool)
+        and isinstance(rerank_confidence, (int, float))
+    )
+    if has_rerank_score:
+        low_confidence = not rerank_match
+        low_confidence_detail = (
+            f"VLM match={str(rerank_match).lower()}, "
+            f"rerank confidence: {rerank_confidence:.2f}, "
+            f"embedding score: {best_score:.2f}"
+        )
+    else:
+        low_confidence = best_score < threshold
+        low_confidence_detail = f"best score: {best_score:.2f}"
 
     if low_confidence and not trim:
         click.secho(
-            f"(low confidence — best score: {best_score:.2f})",
+            f"(low confidence — {low_confidence_detail})",
             fg="yellow",
             err=True,
         )
@@ -772,7 +842,7 @@ def _present_results(results, threshold, trim, save_top, output_dir, overlay, ve
     if should_trim:
         if low_confidence:
             if not click.confirm(
-                f"No confident match found (best score: {best_score:.2f}). "
+                f"No confident match found ({low_confidence_detail}). "
                 "Show results anyway?",
                 default=False,
             ):
